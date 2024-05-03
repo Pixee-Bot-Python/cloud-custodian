@@ -298,6 +298,7 @@ class ServiceTaskDefinitionFilter(RelatedTaskDefinitionFilter):
              - type: stop
     """
 
+
 @ECSCluster.filter_registry.register('ebs-storage')
 class Storage(ValueFilter):
     """Filter clusters by configured EBS storage parameters.
@@ -419,7 +420,6 @@ class SGFilter(net_filters.SecurityGroupFilter):
 
 
 @Service.filter_registry.register('network-location', net_filters.NetworkLocation)
-
 @Service.action_registry.register('modify-definition')
 class UpdateTemplate(BaseAction):
 
@@ -635,13 +635,22 @@ class DeleteService(BaseAction):
         retry = get_retry(('Throttling',))
         for r in resources:
             try:
-                primary = [d for d in r['deployments']
-                           if d['status'] == 'PRIMARY'].pop()
-                if primary['desiredCount'] > 0:
+                desiredCount = 0
+
+                # Two different types of responses:
+                # Deployments would appear for normal services
+                # TaskSets would show for Blue/Green deployment
+                if 'deployments' in r:
+                    primary = [d for d in r['deployments'] if d['status'] == 'PRIMARY'].pop()
+                    desiredCount = primary.get('desiredCount', 0)
+                elif 'taskSets' in r:
+                    primary = [t for t in r['taskSets'] if t['status'] == 'PRIMARY'].pop()
+                    desiredCount = primary.get('computedDesiredCount', 0)
+
+                if desiredCount > 0:
                     retry(client.update_service,
-                          cluster=r['clusterArn'],
-                          service=r['serviceName'],
-                          desiredCount=0)
+                          cluster=r['clusterArn'], service=r['serviceName'], desiredCount=0)
+
                 retry(client.delete_service,
                       cluster=r['clusterArn'], service=r['serviceName'])
             except ClientError as e:
@@ -744,8 +753,6 @@ class TaskSGFilter(net_filters.SecurityGroupFilter):
 
 
 @Task.filter_registry.register('network-location', net_filters.NetworkLocation)
-
-
 @Task.filter_registry.register('task-definition')
 class TaskTaskDefinitionFilter(RelatedTaskDefinitionFilter):
     """Filter tasks by their task definition.
@@ -882,7 +889,7 @@ class DeleteTaskDefinition(BaseAction):
     """
 
     schema = type_schema('delete', force={'type': 'boolean'})
-    permissions = ('ecs:DeregisterTaskDefinition','ecs:DeleteTaskDefinitions',)
+    permissions = ('ecs:DeregisterTaskDefinition', 'ecs:DeleteTaskDefinitions',)
 
     def process(self, resources):
         client = local_session(self.manager.session_factory).client('ecs')
